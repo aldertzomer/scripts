@@ -1,0 +1,50 @@
+#!/bin/bash
+#MinIT on-the-fly file moving and deletion v0.1 Aldert Zomer
+#Because the MinIT storage device is woefully inadequate for even a single run, this script rsyncs files older than 60 minutes to your external storage
+#It expects that your run folder starts with run_
+#Use at your own risk. It *will* delete files on your /data/ mount in every folder starting with run_.
+#Uncomment the rm line in the file comparison routine if you trust it works
+#replace externaldrive with the mountpoint of your storage system
+
+externaldrive=/mnt/sda2
+
+#important. We don't want to have this script running several times. 
+cd /data
+
+if test -n "$(find /data -maxdepth 1 -name 'backupinprogress_*' -print -quit)"
+then
+    echo "Backup is still running or the previous backup run failed due to an error. Your external disk is too slow. This is not good. Exiting!"
+    exit 1
+fi
+
+timestamp=$(date +%s)
+touch /data/backupinprogress_"$timestamp"
+
+#the actual work
+ls /data/ |grep ^run_ |while read runfolder ; do
+    if [ -d "$externaldrive"/"$runfolder" -a -w "$externaldrive"/"$runfolder" ] ; then
+	echo
+	echo "MinION run dir "$runfolder" is present on the external storage device. Proceeding."
+	echo
+    else
+	echo
+	echo "Creating run dir "$runfolder" on the external storage device."
+	mkdir "$externaldrive"/"$runfolder"
+	chmod 777 "$externaldrive"/"$runfolder"
+	echo
+    fi
+    #copying
+    echo "Rsyncing files and folders to "$externaldrive"/"$runfolder" older than 60 minutes"
+    find /data/"$runfolder" -cmin +60 -printf %P\\0  | rsync --ignore-existing --files-from=- --from0 /data/"$runfolder" "$externaldrive"/"$runfolder"
+
+    #file comparison
+    echo "Checking if stuff was copied and is identical, then deleting the files on /data. Uses cmp so a bit slow. Suggestions are welcome (checking the first 1000 bytes of the file?)."
+    find "$runfolder" -cmin +60 -type f |while read file ; do 
+	cmp $file "$externaldrive"/$file && echo "### SUCCESS: $file is identical on "$externaldrive" and on /data! ###" || echo "### WARNING: $file is different! ###"
+	#uncomment if in all test runs you see that all files are identical. This is at your own risk. I am not responsible for file loss. Don't run scripts you don't understand.
+	cmp $file "$externaldrive"/$file && rm /data/$file || echo '### WARNING: Files are different or not found! ###'
+    done
+done
+
+# We did it!
+rm /data/backupinprogress_"$timestamp"
